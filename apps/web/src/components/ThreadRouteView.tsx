@@ -1,12 +1,14 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useLocation, useNavigate, useRouter } from "@tanstack/react-router";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import ChatView from "./ChatView";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
 import { clearWorkbenchReturn, readWorkbenchReturn } from "./workbench/workbenchReturn";
+import { useAppNavHistory } from "../appNavHistory";
 import { useI18n } from "../i18n/i18n";
 import { SidebarInset } from "./ui/sidebar";
 import {
@@ -54,6 +56,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   // from the workbench page is picked up without a remount.
   const pathname = useLocation({ select: (location) => location.pathname });
   const workbenchReturnHref = useMemo(() => readWorkbenchReturn(), [pathname]);
+  const { canGoBack, canGoForward } = useAppNavHistory();
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
     draftId === null ? null : store.getDraftSession(draftId),
@@ -216,19 +219,41 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
 
   return (
     <SidebarInset className="relative h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
-      {workbenchReturnHref !== null ? (
+      <div className="absolute right-3 top-3 z-40 flex items-center gap-1">
         <button
           type="button"
-          className="absolute right-3 top-3 z-40 rounded-md border bg-background/90 px-2 py-1 text-xs shadow-sm hover:bg-accent"
-          onClick={() => {
-            const href = workbenchReturnHref;
-            clearWorkbenchReturn();
-            router.history.push(href);
-          }}
+          aria-label={language === "zh" ? "后退 (Alt+←)" : "Back (Alt+Left)"}
+          title={language === "zh" ? "后退 (Alt+←)" : "Back (Alt+Left)"}
+          disabled={!canGoBack}
+          className="rounded-md border bg-background/90 p-1.5 shadow-sm hover:bg-accent disabled:opacity-40"
+          onClick={() => router.history.back()}
         >
-          {language === "zh" ? "返回工作台" : "Back to workbench"}
+          <ArrowLeft className="size-3.5" />
         </button>
-      ) : null}
+        <button
+          type="button"
+          aria-label={language === "zh" ? "前进 (Alt+→)" : "Forward (Alt+Right)"}
+          title={language === "zh" ? "前进 (Alt+→)" : "Forward (Alt+Right)"}
+          disabled={!canGoForward}
+          className="rounded-md border bg-background/90 p-1.5 shadow-sm hover:bg-accent disabled:opacity-40"
+          onClick={() => router.history.forward()}
+        >
+          <ArrowRight className="size-3.5" />
+        </button>
+        {workbenchReturnHref !== null ? (
+          <button
+            type="button"
+            className="rounded-md border bg-background/90 px-2 py-1 text-xs shadow-sm hover:bg-accent"
+            onClick={() => {
+              const href = workbenchReturnHref;
+              clearWorkbenchReturn();
+              router.history.push(href);
+            }}
+          >
+            {language === "zh" ? "返回工作台" : "Back to workbench"}
+          </button>
+        ) : null}
+      </div>
       {view}
     </SidebarInset>
   );

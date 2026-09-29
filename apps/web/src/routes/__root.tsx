@@ -16,6 +16,7 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
+import { AppNavigationHistory } from "../components/AppNavigationHistory";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
@@ -213,39 +214,40 @@ function RootRouteView() {
     <ToastProvider>
       <AnchoredToastProvider>
         <DocumentTitleSync />
+        <AppNavigationHistory />
         <ContrastAppearanceSync />
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
         <DomTranslator>
-        <FirstRunGate
-          enabled={primaryEnvironmentAuthenticated}
-          hostedStatic={authGateState.status === "hosted-static"}
-        >
-          {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-          {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-          {isElectron ? <RunningThreadKeepAlive /> : null}
-          <RelayClientInstallDialog />
-          <ConnectOnboardingDialog />
-          <SshPasswordPromptDialog />
-          <SnapShotCoordinator />
-          <ThreadNotificationCoordinator />
-          <QueuedMessageSender />
-          <ConfirmDialogHost />
-          <CustomSnoozeDialogHost />
-          <SlowRpcRequestToastCoordinator />
-          <ProjectCloneToastCoordinator />
-          <HostedStaticEnvironmentBootstrap />
-          {primaryEnvironmentAuthenticated ? (
-            <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
-          ) : null}
-          {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
-          {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-          {appShell}
-          {/* Above the router: a theme draft is judged by walking the app, so the
+          <FirstRunGate
+            enabled={primaryEnvironmentAuthenticated}
+            hostedStatic={authGateState.status === "hosted-static"}
+          >
+            {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
+            {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
+            {isElectron ? <RunningThreadKeepAlive /> : null}
+            <RelayClientInstallDialog />
+            <ConnectOnboardingDialog />
+            <SshPasswordPromptDialog />
+            <SnapShotCoordinator />
+            <ThreadNotificationCoordinator />
+            <QueuedMessageSender />
+            <ConfirmDialogHost />
+            <CustomSnoozeDialogHost />
+            <SlowRpcRequestToastCoordinator />
+            <ProjectCloneToastCoordinator />
+            <HostedStaticEnvironmentBootstrap />
+            {primaryEnvironmentAuthenticated ? (
+              <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
+            ) : null}
+            {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
+            {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+            {appShell}
+            {/* Above the router: a theme draft is judged by walking the app, so the
               editor has to survive navigation away from settings. */}
-          <ThemeEditorHost />
-        </FirstRunGate>
+            <ThemeEditorHost />
+          </FirstRunGate>
         </DomTranslator>
       </AnchoredToastProvider>
     </ToastProvider>
