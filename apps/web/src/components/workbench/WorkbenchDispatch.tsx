@@ -68,7 +68,13 @@ import {
   type WorkbenchWorkspaceSelection,
 } from "./WorkbenchWorkspacePicker";
 import { saveWorkbenchReturn } from "./workbenchReturn";
-import type { ReviewSource, WorkbenchRun, WorkbenchRequest } from "./workbenchModel";
+import type {
+  ProjectBinding,
+  ReviewSource,
+  WorkbenchRun,
+  WorkbenchRequest,
+} from "./workbenchModel";
+import { validateProjectBinding } from "./workbenchModel";
 
 type Props = {
   project: string;
@@ -76,6 +82,7 @@ type Props = {
   title: string;
   runs: readonly WorkbenchRun[];
   ownerHold?: boolean;
+  binding?: ProjectBinding | null | undefined;
   onChanged: () => void;
   operationRequest?: WorkbenchRequest;
 };
@@ -122,10 +129,96 @@ function DispatchSelection(props: Props) {
   const [selection, setSelection] = useState(
     ownPending ? `${ownPending.target.environmentId}:${ownPending.target.projectId}` : "",
   );
-  const selected = projects.find((entry) => `${entry.environmentId}:${entry.id}` === selection);
+  const binding = props.binding ?? null;
+  const boundKey = binding ? `${binding.environmentId}:${binding.nativeProjectId}` : null;
+  const effectiveSelection = boundKey ?? selection;
+  const selected = projects.find(
+    (entry) => `${entry.environmentId}:${entry.id}` === effectiveSelection,
+  );
+  const boundProject = binding
+    ? projects.find(
+        (entry) =>
+          entry.environmentId === binding.environmentId && entry.id === binding.nativeProjectId,
+      )
+    : undefined;
+  const bindingDrift =
+    binding &&
+    (!boundProject ||
+      (binding.workspaceRoot !== null && binding.workspaceRoot !== boundProject.workspaceRoot))
+      ? zh
+        ? "绑定的工作区已变化或不存在；解除绑定后才能重新派发"
+        : "The bound workspace has changed or no longer exists; unbind the project before dispatching again"
+      : null;
+  const [unbindReason, setUnbindReason] = useState("");
+  const [unbindBusy, setUnbindBusy] = useState(false);
+  const [bindingError, setBindingError] = useState("");
+  async function unbind() {
+    if (unbindBusy || !unbindReason.trim()) return;
+    const request = props.operationRequest ?? fetch;
+    setUnbindBusy(true);
+    setBindingError("");
+    try {
+      const response = await request(
+        `/workbench-api/project-binding/${encodeURIComponent(props.taskSlug)}/revoke`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Specgraph-Project": props.project },
+          body: JSON.stringify({ reason: unbindReason.trim() }),
+        },
+      );
+      if (!response.ok) {
+        const details: unknown = await response.json().catch(() => null);
+        throw new Error(
+          details && typeof details === "object" && "error" in details
+            ? String(details.error)
+            : `HTTP ${response.status}`,
+        );
+      }
+      setUnbindReason("");
+      props.onChanged();
+    } catch (cause) {
+      setBindingError(String(cause));
+    } finally {
+      setUnbindBusy(false);
+    }
+  }
   return (
     <section className="space-y-3 border-t py-4" data-i18n-skip>
       <h3 className="text-sm font-semibold">{zh ? "执行与分派" : "Execution and dispatch"}</h3>
+      {binding ? (
+        <div className="space-y-2">
+          <p className="break-all">
+            {zh ? "项目绑定" : "Project binding"}:{" "}
+            {`${binding.environmentId} · ${binding.nativeProjectId} · ${binding.workspaceRoot ?? (zh ? "未记录" : "unrecorded")} · ${binding.actor} · ${binding.createdAt}`}
+          </p>
+          {!ownPending ? (
+            <div className="space-y-2">
+              <input
+                aria-label={zh ? "解除绑定原因" : "Unbind reason"}
+                className="w-full rounded border bg-background p-2"
+                maxLength={4000}
+                value={unbindReason}
+                disabled={unbindBusy}
+                onChange={(event) => setUnbindReason(event.target.value)}
+              />
+              <button
+                type="button"
+                className="wb-button"
+                disabled={unbindBusy || !unbindReason.trim()}
+                onClick={() => void unbind()}
+              >
+                {zh ? "解除项目绑定" : "Unbind project"}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {bindingDrift ? <p role="alert">{bindingDrift}</p> : null}
+      {bindingError ? (
+        <p role="alert" className="break-words text-destructive">
+          {bindingError}
+        </p>
+      ) : null}
       {recovery.error || (pending && !ownPending) ? (
         <p role="alert">
           {recovery.error ||
@@ -137,8 +230,8 @@ function DispatchSelection(props: Props) {
             {zh ? "T3 项目" : "T3 project"}
             <select
               className="mt-1 block w-full rounded border bg-background p-2"
-              value={selection}
-              disabled={!!ownPending}
+              value={effectiveSelection}
+              disabled={!!ownPending || !!binding}
               onChange={(event) => setSelection(event.target.value)}
             >
               <option value="">{zh ? "选择项目" : "Select project"}</option>
@@ -152,11 +245,19 @@ function DispatchSelection(props: Props) {
               ))}
             </select>
           </label>
+          {binding && boundProject ? (
+            <p>
+              {zh
+                ? "已绑定该项目；解除绑定后才能改派其他项目。"
+                : "Bound to this project; unbind before dispatching to another project."}
+            </p>
+          ) : null}
           {selected ? (
             <DispatchForm
-              key={selection}
+              key={effectiveSelection}
               {...props}
               nativeProject={selected}
+              bindingDrift={bindingDrift}
               recovered={ownPending}
               onRecoveryCleared={() => setRecovery({ pending: null, error: "" })}
             />
@@ -179,6 +280,8 @@ function DispatchForm({
   title,
   runs,
   ownerHold = false,
+  binding,
+  bindingDrift = null,
   onChanged,
   nativeProject,
   recovered,
@@ -186,6 +289,7 @@ function DispatchForm({
   operationRequest = fetch,
 }: Props & {
   nativeProject: EnvironmentProject;
+  bindingDrift: string | null;
   recovered: Pending | null;
   onRecoveryCleared: () => void;
 }) {
@@ -230,6 +334,7 @@ function DispatchForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [receipt, setReceipt] = useState("");
+  const [bindingWarning, setBindingWarning] = useState("");
   const [needsLogin, setNeedsLogin] = useState(false);
   const [key, setKey] = useState("");
   const [note, setNote] = useState(recovered?.abortNote ?? "");
@@ -348,6 +453,7 @@ function DispatchForm({
         ? resolvePromptInjectedEffort(caps, composer.promptEffort)
         : null;
   const unavailable =
+    bindingDrift ||
     selectionError(selection, injectedEffort) ||
     (!workspaceSelection ? text("请选择执行工作区。", "Select an execution workspace.") : null) ||
     (target && !target.workPurpose
@@ -661,6 +767,31 @@ function DispatchForm({
           "T3 accepted the command; this does not prove the model has started.",
         ),
       );
+      if (binding === null) {
+        // First confirmed dispatch establishes the project binding. A binding
+        // failure never masks the completed dispatch; it is only reported.
+        try {
+          const recorded = await request<unknown>(
+            `/project-binding/${encodeURIComponent(taskSlug)}`,
+            controller,
+            {
+              environmentId: stored.target.environmentId,
+              nativeProjectId: stored.target.projectId,
+              workspaceRoot: stored.target.projectWorkspaceRoot ?? nativeProject.workspaceRoot,
+              reason: `${text("首次人工审核派发", "First human-reviewed dispatch")}: ${taskSlug}`,
+            },
+          );
+          validateProjectBinding(recorded, project);
+        } catch (bindCause) {
+          if (!controller.signal.aborted)
+            setBindingWarning(
+              text(
+                "派发成功，项目绑定未记录：",
+                "Dispatch succeeded; the project binding was not recorded: ",
+              ) + String(bindCause),
+            );
+        }
+      }
       onChanged();
     } catch (cause) {
       if (!controller.signal.aborted) setError(String(cause));
@@ -1236,6 +1367,7 @@ function DispatchForm({
         </p>
       ) : null}
       {receipt ? <p role="status">{receipt}</p> : null}
+      {bindingWarning ? <p role="alert">{bindingWarning}</p> : null}
       {context ? (
         <button
           type="button"
