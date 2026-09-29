@@ -886,8 +886,13 @@ describe("ProviderCommandReactor", () => {
       runtimeMode: "approval-required",
     });
 
+    await waitFor(async () => (await harness.readModel()).threads.some((entry) =>
+      entry.id === ThreadId.make("thread-1") && entry.activities.some((activity) => activity.kind === "provider.turn.request-linked")));
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.activities.find((activity) => activity.kind === "provider.turn.request-linked")).toMatchObject({
+      turnId: "turn-1", payload: { messageId: "user-message-1", startCommandId: "cmd-turn-start-1" },
+    });
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");

@@ -120,7 +120,9 @@ const NOTICE_TEXT_EXTENSIONS = new Set([
   ".txt",
   ".unlicense",
 ]);
-const FIRST_PARTY_PACKAGE_PREFIX = "@t3tools/";
+function isFirstPartyPackage(name: string): boolean {
+  return name.startsWith("@t3tools/") || name === "@project-workbench/ui" || name === "@project-workbench/mail";
+}
 
 function isNoticeTextFile(fileName: string): boolean {
   return (
@@ -530,7 +532,7 @@ async function collectProductionDependencyPackages(
       const dependencyPackageJsonPath = NodePath.join(resolved.packageRoot, "package.json");
       const name =
         typeof resolved.packageJson.name === "string" ? resolved.packageJson.name : dependencyName;
-      if (!name.startsWith(FIRST_PARTY_PACKAGE_PREFIX)) {
+      if (!isFirstPartyPackage(name)) {
         const identity = packageIdentity(resolved.packageJson, resolved.packageRoot);
         const existing = collection.byIdentity.get(identity);
         if (existing) {
@@ -586,7 +588,7 @@ async function addBundledModulePackages(
       throw error;
     }
     if (!found || typeof found.packageJson.name !== "string") continue;
-    if (found.packageJson.name.startsWith(FIRST_PARTY_PACKAGE_PREFIX)) continue;
+    if (isFirstPartyPackage(found.packageJson.name)) continue;
     const identity = packageIdentity(found.packageJson, found.packageRoot);
     const existing = collection.byIdentity.get(identity);
     if (existing) {

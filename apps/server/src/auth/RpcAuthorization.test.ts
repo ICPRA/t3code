@@ -3,6 +3,7 @@ import {
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthTerminalOperateScope,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -15,6 +16,12 @@ import {
 } from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("requires terminal operation permission for programs, but only read permission for observations", () => {
+    for (const method of [WS_METHODS.workbenchProgramStart, WS_METHODS.workbenchProgramCancel, WS_METHODS.workbenchProgramComplete]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthTerminalOperateScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.workbenchProgramRead)).toBe(AuthOrchestrationReadScope);
+  });
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

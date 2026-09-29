@@ -145,6 +145,18 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
+  it.effect("uses the explicit Electron profile without probing the installed profile", () =>
+    withIdentity(Effect.gen(function* () {
+      const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+      const environment = yield* DesktopEnvironment.DesktopEnvironment;
+      assert.equal(yield* identity.resolveUserDataPath, "/vacpms/electron-user-data");
+      assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
+    }), {
+      environment: { env: { T3CODE_DESKTOP_USER_DATA_DIR: "/vacpms/electron-user-data" } },
+      legacyPathProbeError: PlatformError.systemError({ _tag: "PermissionDenied", module: "FileSystem", method: "exists", description: "must not inspect installed profile", pathOrDescriptor: "/installed" }),
+    }),
+  );
+
   it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
       Effect.gen(function* () {

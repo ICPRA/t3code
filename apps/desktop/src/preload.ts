@@ -63,6 +63,8 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  readWorkbench: (input) => ipcRenderer.invoke("vacpms:read-node", input),
+  commandWorkbench: (input) => ipcRenderer.invoke("vacpms:command", input),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

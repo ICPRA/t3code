@@ -315,6 +315,14 @@ export function createVcsEnvironmentAtoms<R, E>(
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
     }),
+    readHead: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:read-head",
+      tag: WS_METHODS.vcsReadHead,
+    }),
+    compareCommits: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:compare-commits",
+      tag: WS_METHODS.vcsCompareCommits,
+    }),
     // Live stages of a bootstrap worktree setup. Null until the server begins
     // tracking, then a snapshot per change, then null again after the setup
     // is dropped. Short TTL so a closed thread releases its subscription.

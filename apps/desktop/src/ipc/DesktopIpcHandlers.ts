@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
+import { makeWorkbenchReadMethod } from "./methods/workbench.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
 import {
@@ -73,6 +74,9 @@ import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./m
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  const workbenchMethods = yield* makeWorkbenchReadMethod;
+  yield* ipc.handle(workbenchMethods.read);
+  yield* ipc.handle(workbenchMethods.command);
   yield* installNotificationBadge();
   yield* PreviewIpc.installPreviewEventForwarding();
 

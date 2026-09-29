@@ -892,6 +892,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
+
   it.effect("debounces move and resize bounds updates", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();

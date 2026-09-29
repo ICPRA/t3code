@@ -77,6 +77,25 @@ afterEach(async () => {
 });
 
 describe("third-party license generation", () => {
+  it("excludes local workbench packages but retains their third-party dependencies", async () => {
+    const fixture = await createFixture();
+    await writeJson(fixture.appManifest, {
+      name: "fixture-app",
+      dependencies: { "@project-workbench/ui": "0.1.0", "@project-workbench/mail": "0.1.0" },
+    });
+    for (const name of ["ui", "mail"]) {
+      await writeJson(NodePath.join(fixture.root, "node_modules", "@project-workbench", name, "package.json"), {
+        name: `@project-workbench/${name}`, version: "0.1.0", private: true,
+        dependencies: { "demo-dependency": "1.2.3" },
+      });
+    }
+    const manifest = await generateThirdPartyLicenseManifest({
+      configFile: fixture.configFile,
+      packageManifests: [{ bundle: "web", path: fixture.appManifest }],
+    });
+    expect(manifest.entries.map((entry) => entry.name)).toEqual(["demo-asset", "demo-dependency"]);
+  });
+
   it("keeps the GhosttyKit notice pinned to the vendored framework revision", async () => {
     const [config, revision] = await Promise.all([
       NodeFSP.readFile(NodePath.join(REPOSITORY_ROOT, "third-party-licenses.config.json"), "utf8"),

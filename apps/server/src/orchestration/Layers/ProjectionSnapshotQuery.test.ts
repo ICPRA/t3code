@@ -2388,6 +2388,136 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         [],
       );
       yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES (
+          'project-search-other', 'Other project', '/project-search-other', '[]',
+          '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, created_at, updated_at
+        ) VALUES (
+          'thread-other-project', 'project-search-other', 'Other project match',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          '2026-05-01T00:00:18.000Z', '2026-05-01T00:00:19.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, role, text, is_streaming, created_at, updated_at
+        ) VALUES (
+          'message-other-project', 'thread-other-project', 'user', 'Other project needle', 0,
+          '2026-05-01T00:00:18.000Z', '2026-05-01T00:00:18.000Z'
+        )
+      `;
+      const global = yield* snapshotQuery.searchThreads({ query: "needle", limit: 1 });
+      assert.equal(global.matches[0]?.threadId, ThreadId.make("thread-other-project"));
+      const scoped = yield* snapshotQuery.searchThreads({
+        query: "needle",
+        limit: 1,
+        projectId: asProjectId("project-search"),
+      });
+      assert.deepStrictEqual(scoped.matches.map((match) => match.threadId), [
+        ThreadId.make("thread-active"),
+      ]);
+      assert.equal(scoped.matches[0]?.messageId, MessageId.make("message-user"));
+      const withArchived = yield* snapshotQuery.searchThreads({
+        query: "needle",
+        limit: 1,
+        projectId: asProjectId("project-search"),
+        includeArchived: true,
+      });
+      assert.deepStrictEqual(withArchived.matches.map((match) => match.threadId), [
+        ThreadId.make("thread-hidden"),
+      ]);
+      assert.deepStrictEqual(
+        (yield* snapshotQuery.searchThreads({
+          query: "hidden needle",
+          projectId: asProjectId("project-search"),
+          includeArchived: false,
+        })).matches,
+        [],
+      );
+      const source = {
+        projectId: asProjectId("project-search"),
+        threadId: ThreadId.make("thread-active"),
+        messageId: MessageId.make("message-user"),
+        offset: 0,
+        maxCharacters: 2,
+      };
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET text = ${"A\u{1F600}\u4E2DB"}, updated_at = '2026-05-01T00:00:22.000Z'
+        WHERE message_id = 'message-user'
+      `;
+      const first = Option.getOrThrow(yield* snapshotQuery.readProjectConversationMessage(source));
+      assert.deepStrictEqual(first, {
+        projectId: source.projectId,
+        threadId: source.threadId,
+        messageId: source.messageId,
+        source: "user",
+        createdAt: "2026-05-01T00:00:12.000Z",
+        updatedAt: "2026-05-01T00:00:22.000Z",
+        text: "A\u{1F600}",
+        offset: 0,
+        nextOffset: 2,
+      });
+      const second = Option.getOrThrow(yield* snapshotQuery.readProjectConversationMessage({ ...source, offset: 2 }));
+      assert.equal(second.text, "\u4E2DB");
+      assert.equal(second.offset, 2);
+      assert.isNull(second.nextOffset);
+      assert.equal(first.text + second.text, "A\u{1F600}\u4E2DB");
+      assert.isTrue(Option.isNone(yield* snapshotQuery.readProjectConversationMessage({
+        ...source, projectId: asProjectId("project-search-other"),
+      })));
+      assert.isTrue(Option.isNone(yield* snapshotQuery.readProjectConversationMessage({
+        ...source, threadId: ThreadId.make("thread-hidden"),
+      })));
+      for (const messageId of ["message-interim", "message-system"]) {
+        assert.isTrue(Option.isNone(yield* snapshotQuery.readProjectConversationMessage({
+          ...source, messageId: MessageId.make(messageId),
+        })));
+      }
+      const final = Option.getOrThrow(yield* snapshotQuery.readProjectConversationMessage({
+        ...source, messageId: MessageId.make("message-final"), maxCharacters: 6000,
+      }));
+      assert.equal(final.source, "assistant");
+      assert.equal(final.text, "The canonical final needle appears in this completed answer.");
+      const archivedSource = {
+        ...source, threadId: ThreadId.make("thread-hidden"),
+        messageId: MessageId.make("message-hidden"), maxCharacters: 6000,
+      };
+      const archived = Option.getOrThrow(yield* snapshotQuery.readProjectConversationMessage(archivedSource));
+      assert.equal(archived.text, "Hidden needle in archive.");
+      yield* sql`UPDATE projection_thread_messages SET is_streaming = 1 WHERE message_id = 'message-user'`;
+      assert.isTrue(Option.isNone(yield* snapshotQuery.readProjectConversationMessage(source)));
+      yield* sql`
+        UPDATE projection_threads SET deleted_at = '2026-05-01T00:00:20.000Z'
+        WHERE thread_id = 'thread-hidden'
+      `;
+      assert.isTrue(Option.isNone(yield* snapshotQuery.readProjectConversationMessage(archivedSource)));
+      yield* sql`UPDATE projection_projects SET deleted_at = '2026-05-01T00:00:23.000Z' WHERE project_id = 'project-search-other'`;
+      assert.isTrue(Option.isNone(yield* snapshotQuery.readProjectConversationMessage({
+        ...source, projectId: asProjectId("project-search-other"),
+        threadId: ThreadId.make("thread-other-project"), messageId: MessageId.make("message-other-project"),
+      })));
+      assert.deepStrictEqual(
+        (yield* snapshotQuery.searchThreads({
+          query: "hidden needle",
+          projectId: asProjectId("project-search"),
+          includeArchived: true,
+        })).matches,
+        [],
+      );
+      yield* sql`
+        UPDATE projection_thread_messages
+        SET text = 'Please find this USER needle in an old prompt.', is_streaming = 0
+        WHERE message_id = 'message-user'
+      `;
+      yield* sql`
         UPDATE projection_threads
         SET deleted_at = '2026-05-01T00:00:20.000Z'
         WHERE thread_id = 'thread-active'

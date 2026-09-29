@@ -23,6 +23,10 @@ import {
   type GitRunStackedActionInput,
   type GitRunStackedActionResult,
   type VcsStatusInput,
+  type VcsReadHeadInput,
+  type VcsReadHeadResult,
+  type VcsCompareCommitsInput,
+  type VcsCompareCommitsResult,
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
@@ -43,6 +47,12 @@ export class GitWorkflowService extends Context.Service<
     readonly status: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
+    readonly readHead: (
+      input: VcsReadHeadInput,
+    ) => Effect.Effect<VcsReadHeadResult, GitManagerServiceError>;
+    readonly compareCommits: (
+      input: VcsCompareCommitsInput,
+    ) => Effect.Effect<VcsCompareCommitsResult, GitManagerServiceError>;
     readonly localStatus: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
@@ -295,6 +305,73 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map((result) => result.exitCode === 0),
       ),
+    readHead: Effect.fn("GitWorkflowService.readHead")(function* (input: VcsReadHeadInput) {
+      const operation = "GitWorkflowService.readHead";
+      if (!(yield* detectGitRepositoryForStatus(operation, input.cwd))) {
+        return { isRepo: false, commitSha: null };
+      }
+      const result = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        allowNonZeroExit: true,
+      });
+      if (result.exitCode === 1) return { isRepo: true, commitSha: null };
+      if (result.exitCode !== 0) {
+        return yield* new GitCommandError({
+          operation, command: "git rev-parse --verify --quiet HEAD^{commit}", cwd: input.cwd,
+          exitCode: result.exitCode, detail: "Failed to read the current HEAD commit.",
+        });
+      }
+      return { isRepo: true, commitSha: result.stdout.trim() };
+    }),
+    compareCommits: Effect.fn("GitWorkflowService.compareCommits")(function* (input: VcsCompareCommitsInput) {
+      const operation = "GitWorkflowService.compareCommits";
+      yield* ensureGit(operation, input.cwd);
+      const { commitSha: baseCommit } = yield* git.resolveCommit({ cwd: input.cwd, revision: input.baseCommit });
+      const { commitSha: headCommit } = yield* git.resolveCommit({ cwd: input.cwd, revision: input.headCommit });
+      const ancestry = yield* git.execute({
+        operation, cwd: input.cwd, args: ["merge-base", "--is-ancestor", baseCommit, headCommit], allowNonZeroExit: true,
+      });
+      if (ancestry.exitCode !== 0 && ancestry.exitCode !== 1) {
+        return yield* new GitCommandError({ operation, command: "git merge-base --is-ancestor", cwd: input.cwd, exitCode: ancestry.exitCode, detail: "Failed to compare commit ancestry." });
+      }
+      const offset = input.offset ?? 0;
+      const limit = input.limit ?? 50;
+      const log = yield* git.execute({
+        operation, cwd: input.cwd,
+        args: ["log", "--no-show-signature", "-z", "--format=%H%x00%aI%x00%s", `--max-count=${limit + 1}`, `--skip=${offset}`, `${baseCommit}..${headCommit}`, "--"],
+        maxOutputBytes: 1024 * 1024,
+        appendTruncationMarker: false,
+      });
+      if (log.stdoutTruncated || log.stderrTruncated || (log.stdout !== "" && !log.stdout.endsWith("\0"))) {
+        return yield* new GitCommandError({ operation, command: "git log", cwd: input.cwd, detail: "Commit list was truncated or malformed." });
+      }
+      const fields = log.stdout === "" ? [] : log.stdout.slice(0, -1).split("\0");
+      if (fields.length % 3 !== 0) {
+        return yield* new GitCommandError({ operation, command: "git log", cwd: input.cwd, detail: "Commit list was malformed." });
+      }
+      const commits: Array<{ commitSha: string; authoredAt: string; subject: string }> = [];
+      for (let index = 0; index < fields.length; index += 3) {
+        const commitSha = fields[index]!;
+        const authoredAt = fields[index + 1]!;
+        if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commitSha) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(authoredAt) || !Number.isFinite(Date.parse(authoredAt))) {
+          return yield* new GitCommandError({ operation, command: "git log", cwd: input.cwd, detail: "Commit identity or author date was malformed." });
+        }
+        commits.push({ commitSha, authoredAt, subject: fields[index + 2]! });
+      }
+      const diff = yield* git.execute({
+        operation, cwd: input.cwd,
+        args: ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--ignore-submodules=none", "--submodule=short", "--src-prefix=a/", "--dst-prefix=b/", baseCommit, headCommit, "--"],
+        maxOutputBytes: 2 * 1024 * 1024,
+        appendTruncationMarker: true,
+      });
+      return {
+        baseCommit, headCommit, baseIsAncestor: ancestry.exitCode === 0,
+        commits: commits.slice(0, limit), nextOffset: commits.length > limit ? offset + limit : null,
+        diff: diff.stdout, diffTruncated: diff.stdoutTruncated,
+      };
+    }),
     status: (input) =>
       detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>

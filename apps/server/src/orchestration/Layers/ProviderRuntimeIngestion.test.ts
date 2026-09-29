@@ -20,6 +20,7 @@ import {
   type OrchestrationCommand,
   ProjectId,
   ProviderItemId,
+  RuntimeItemId,
   RuntimeRequestId,
   type ServerSettings,
   ThreadId,
@@ -60,8 +61,10 @@ import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
   ProviderRuntimeIngestionLive,
+  runtimeEventToActivities,
   splitBufferedAssistantText,
 } from "./ProviderRuntimeIngestion.ts";
+import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -468,6 +471,7 @@ describe("ProviderRuntimeIngestion", () => {
       payload: {
         state: "failed",
         errorMessage: "turn failed",
+        tokenUsage: { usageStatus: "complete", usageScope: "main_agent", hasSubagents: false, inputTokens: 120, cachedInputTokens: 40, outputTokens: 30, reasoningTokens: 10 },
       },
     });
 
@@ -480,6 +484,10 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+    const withUsage = await waitForThread(harness.readModel, (entry) => entry.activities.some((activity) => activity.kind === "provider.turn.token-usage"));
+    expect(withUsage.activities.find((activity) => activity.kind === "provider.turn.token-usage")).toMatchObject({
+      turnId: "turn-1", payload: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 40, reasoningTokens: 10, usageScope: "main_agent" },
+    });
   });
 
   it.each([
@@ -1795,6 +1803,112 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("assistant-only final text");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("links consulted conversation sources only from successful native Codex results", () => {
+    const source = {
+      projectId: "source-project", threadId: "source-thread", messageId: "source-message",
+      source: "user", updatedAt: "2026-09-23T00:00:00.000Z", offset: 0, nextOffset: null,
+    };
+    const output = { ...source, text: "Actual original message" };
+    // Matches CodexAdapter's persisted item/completed envelope, not the request arguments.
+    const item = {
+      type: "mcpToolCall", id: "source-read", server: "t3-code",
+      tool: "workbench_read_conversation_message", status: "completed", error: null,
+      arguments: { threadId: "wrong-request-thread", messageId: "wrong-request-message" },
+      result: { isError: false, structuredContent: output },
+    };
+    const base: Extract<ProviderRuntimeEvent, { type: "item.completed" }> = {
+      type: "item.completed", eventId: asEventId("evt-source-read"), provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-09-23T00:00:01.000Z", threadId: asThreadId("consumer-thread"),
+      itemId: RuntimeItemId.make("source-read"),
+      payload: { itemType: "mcp_tool_call", status: "completed", data: { item } },
+    };
+    const event = { ...base, turnId: asTurnId("consumer-turn") };
+    for (const result of [item.result, { content: [{ type: "text", text: JSON.stringify(output) }] }]) {
+      const data = { item: { ...item, result } };
+      const activities = runtimeEventToActivities({ ...event, payload: { ...event.payload, data } });
+      expect(activities).toHaveLength(1);
+      const activity = activities[0]!;
+      expect(activity.kind).toBe("tool.completed");
+      expect(activity.turnId).toBe("consumer-turn");
+      expect((activity.payload as Record<string, unknown>).consultedSource).toEqual(source);
+      expect((activity.payload as Record<string, unknown>).data).toBe(data);
+      expect((projectActivityPayload(activity).payload as Record<string, unknown>).consultedSource).toEqual(source);
+    }
+    const invalidItems = [
+      { ...item, server: "unrelated-server" },
+      { ...item, status: "failed" },
+      { ...item, error: { message: "failed" } },
+      { ...item, result: { ...item.result, isError: true } },
+      { ...item, arguments: output, result: null },
+      { ...item, result: { content: [{ type: "text", text: "Result: " + JSON.stringify(output) }] } },
+      { ...item, result: { structuredContent: { ...output, text: "" } } },
+      { ...item, result: { structuredContent: { ...output, offset: -1 } } },
+    ];
+    const invalidEvents: Array<Extract<ProviderRuntimeEvent, { type: "item.completed" }>> = [
+      base,
+      { ...event, provider: ProviderDriverKind.make("claude") },
+      { ...event, payload: { ...event.payload, status: "failed" } },
+      ...invalidItems.map((invalidItem) => ({ ...event, payload: { ...event.payload, data: { item: invalidItem } } })),
+    ];
+    for (const invalidEvent of invalidEvents) {
+      const activity = runtimeEventToActivities(invalidEvent)[0]!;
+      expect((activity.payload as Record<string, unknown>).consultedSource).toBeUndefined();
+    }
+  });
+
+  it("projects only scoped metadata from successful native project record reads", () => {
+    const metadata = {
+      specgraphProject: "sg-project", nativeProjectId: "native-project", environmentId: "local",
+      kind: "spec", id: "spec-id", slug: "spec-slug", version: 3,
+      sourceRefs: { intent: "source-intent", output: "source-output" },
+    };
+    const output = { ...metadata, record: { body: "private original record body" } };
+    const item = {
+      type: "mcpToolCall", id: "record-read", server: "t3-code",
+      tool: "workbench_read_project_record", status: "completed", error: null,
+      arguments: { kind: "decision", reference: "wrong-request" },
+      result: { isError: false, structuredContent: output },
+    };
+    const base: Extract<ProviderRuntimeEvent, { type: "item.completed" }> = {
+      type: "item.completed", eventId: asEventId("evt-record-read"), provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-09-23T00:00:01.000Z", threadId: asThreadId("consumer-thread"),
+      itemId: RuntimeItemId.make("record-read"),
+      payload: { itemType: "mcp_tool_call", status: "completed", data: { item } },
+    };
+    const event = { ...base, turnId: asTurnId("consumer-turn") };
+    for (const result of [item.result, { content: [{ type: "text", text: JSON.stringify(output) }] }]) {
+      const activity = runtimeEventToActivities({ ...event, payload: { ...event.payload, data: { item: { ...item, result } } } })[0]!;
+      expect(activity.turnId).toBe("consumer-turn");
+      expect((activity.payload as Record<string, unknown>).consultedRecord).toEqual(metadata);
+      expect((activity.payload as Record<string, unknown>).consultedSource).toBeUndefined();
+      expect((projectActivityPayload(activity).payload as Record<string, unknown>).consultedRecord).toEqual(metadata);
+      expect(JSON.stringify((projectActivityPayload(activity).payload as Record<string, unknown>).consultedRecord)).not.toContain("private original record body");
+    }
+    const invalidItems = [
+      { ...item, tool: "workbench_search_project_knowledge" },
+      { ...item, status: "failed" },
+      { ...item, error: { message: "failed" } },
+      { ...item, result: { ...item.result, isError: true } },
+      { ...item, result: { structuredContent: { ...output, nativeProjectId: undefined } } },
+      { ...item, result: { structuredContent: { ...output, environmentId: undefined } } },
+      { ...item, result: { structuredContent: { ...output, specgraphProject: undefined } } },
+      { ...item, result: { structuredContent: { ...output, record: null } } },
+      { ...item, result: { structuredContent: { ...output, record: "not an object" } } },
+      { ...item, result: { structuredContent: { ...metadata } } },
+      { ...item, result: { content: [{ type: "text", text: JSON.stringify({ ...metadata, record: [] }) }] } },
+    ];
+    const invalidEvents: Array<Extract<ProviderRuntimeEvent, { type: "item.completed" }>> = [
+      base,
+      { ...event, provider: ProviderDriverKind.make("claude") },
+      { ...event, payload: { ...event.payload, status: "failed" } },
+      ...invalidItems.map((invalidItem) => ({ ...event, payload: { ...event.payload, data: { item: invalidItem } } })),
+    ];
+    for (const invalidEvent of invalidEvents) {
+      const activity = runtimeEventToActivities(invalidEvent)[0]!;
+      expect((activity.payload as Record<string, unknown>).consultedRecord).toBeUndefined();
+    }
   });
 
   it("preserves completed tool metadata on projected tool activities", async () => {

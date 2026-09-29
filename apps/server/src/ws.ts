@@ -120,6 +120,7 @@ import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import { WorkbenchProgramRuns } from "./workbenchProgramRuns.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
@@ -504,6 +505,7 @@ const makeWsRpcLayer = (
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
+      const programRuns = yield* WorkbenchProgramRuns;
       const sql = yield* SqlClient.SqlClient;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       /** A reference's host-level link key; the project's own host where the ref names none. */
@@ -1873,6 +1875,10 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.workbenchProgramStart]: (input) => observeRpcEffect(WS_METHODS.workbenchProgramStart, programRuns.start(input)),
+        [WS_METHODS.workbenchProgramCancel]: (input) => observeRpcEffect(WS_METHODS.workbenchProgramCancel, programRuns.cancel(input)),
+        [WS_METHODS.workbenchProgramRead]: (input) => observeRpcEffect(WS_METHODS.workbenchProgramRead, programRuns.read(input)),
+        [WS_METHODS.workbenchProgramComplete]: (input) => observeRpcEffect(WS_METHODS.workbenchProgramComplete, programRuns.complete(input)),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -3371,6 +3377,14 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.vcsListRefs]: (input) =>
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsReadHead]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsReadHead, gitWorkflow.readHead(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsCompareCommits]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsCompareCommits, gitWorkflow.compareCommits(input), {
             "rpc.aggregate": "vcs",
           }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>

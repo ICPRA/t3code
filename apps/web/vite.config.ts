@@ -1,4 +1,5 @@
 import * as NodeZlib from "node:zlib";
+import { fileURLToPath } from "node:url";
 
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
@@ -225,6 +226,14 @@ export default defineConfig(() => {
       bundledDev,
     },
     server: {
+      fs: {
+        allow: [
+          fileURLToPath(new URL("../..", import.meta.url)),
+          fileURLToPath(
+            new URL("../../../project-workbench/extensions/workbench-ui", import.meta.url),
+          ),
+        ],
+      },
       host,
       port,
       strictPort: true,
@@ -244,16 +253,27 @@ export default defineConfig(() => {
             // Vite's HMR socket is matched separately and exactly (path "/"
             // plus a vite-hmr subprotocol), so the upgrade handlers don't
             // collide.
-            proxy: Object.fromEntries(
-              DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
-                prefix,
-                {
-                  target: devProxyTarget,
-                  changeOrigin: true,
-                  ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
-                },
-              ]),
-            ),
+            proxy: {
+              ...Object.fromEntries(
+                DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
+                  prefix,
+                  {
+                    target: devProxyTarget,
+                    changeOrigin: true,
+                    ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
+                  },
+                ]),
+              ),
+              // Project workbench: /workbench-api/{wb,loop}/* is served directly
+              // by the extended SpecGraph server (loopback-trusted endpoints on
+              // 127.0.0.1:8690); the prefix is stripped, no auth injection needed.
+              "/workbench-api": {
+                target: process.env.T3_WORKBENCH_API_URL ?? "http://127.0.0.1:8690",
+                changeOrigin: true,
+                rewrite: (path: string) => path.replace(/^\/workbench-api/, ""),
+                cookiePathRewrite: "/workbench-api",
+              },
+            },
           }
         : {}),
       // Electron's BrowserWindow needs the HMR socket pinned to an explicit

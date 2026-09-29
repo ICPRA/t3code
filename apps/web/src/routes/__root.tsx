@@ -79,6 +79,7 @@ import {
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { installDesktopPasteAsText } from "../lib/desktopPasteAsText";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+import { DomTranslator } from "../i18n/i18n";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -216,6 +217,7 @@ function RootRouteView() {
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
+        <DomTranslator>
         <FirstRunGate
           enabled={primaryEnvironmentAuthenticated}
           hostedStatic={authGateState.status === "hosted-static"}
@@ -244,6 +246,7 @@ function RootRouteView() {
               editor has to survive navigation away from settings. */}
           <ThemeEditorHost />
         </FirstRunGate>
+        </DomTranslator>
       </AnchoredToastProvider>
     </ToastProvider>
   );

@@ -189,13 +189,34 @@ const ActiveThreadRowsRequest = Schema.Struct({ unsettledOnly: Schema.Boolean })
 const ProjectionThreadSearchRequest = Schema.Struct({
   pattern: Schema.String,
   limit: Schema.Int,
+  projectId: Schema.NullOr(ProjectId),
+  includeArchived: Schema.Boolean,
 });
 const ProjectionThreadSearchRow = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  messageId: MessageId,
   source: OrchestrationThreadSearchSource,
   matchText: Schema.String,
   messageCreatedAt: Schema.NullOr(IsoDateTime),
+});
+const ProjectionConversationMessageRequest = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  offset: Schema.Int,
+  maxCharacters: Schema.Int,
+});
+const ProjectionConversationMessageRow = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  source: OrchestrationThreadSearchSource,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  text: Schema.String,
+  offset: Schema.Int,
+  nextOffset: Schema.NullOr(Schema.Int),
 });
 const WorkspaceRootLookupInput = Schema.Struct({
   workspaceRoot: Schema.String,
@@ -1101,15 +1122,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  const searchActiveThreadRows = SqlSchema.findAll({
+  const searchThreadRows = SqlSchema.findAll({
     Request: ProjectionThreadSearchRequest,
     Result: ProjectionThreadSearchRow,
-    execute: ({ pattern, limit }) =>
+    execute: ({ pattern, limit, projectId, includeArchived }) =>
       sql`
         WITH ranked AS (
           SELECT
             threads.thread_id AS thread_id,
             threads.project_id AS project_id,
+            messages.message_id AS message_id,
             CASE messages.role
               WHEN 'user' THEN 'user'
               ELSE 'assistant'
@@ -1137,7 +1159,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           INNER JOIN projection_projects AS projects
             ON projects.project_id = threads.project_id
           WHERE threads.deleted_at IS NULL
-            AND threads.archived_at IS NULL
+            AND (${includeArchived ? 1 : 0} = 1 OR threads.archived_at IS NULL)
+            AND (${projectId} IS NULL OR threads.project_id = ${projectId})
             AND projects.deleted_at IS NULL
             AND messages.is_streaming = 0
             -- Only these two roles are searchable, and the CASE above depends
@@ -1160,6 +1183,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          message_id AS "messageId",
           source,
           match_text AS "matchText",
           message_created_at AS "messageCreatedAt"
@@ -1171,6 +1195,33 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id ASC
         LIMIT ${limit}
       `,
+  });
+
+  const readProjectConversationMessageRow = SqlSchema.findOneOption({
+    Request: ProjectionConversationMessageRequest,
+    Result: ProjectionConversationMessageRow,
+    execute: ({ projectId, threadId, messageId, offset, maxCharacters }) => sql`
+      SELECT threads.project_id AS "projectId", threads.thread_id AS "threadId",
+        messages.message_id AS "messageId", messages.role AS source,
+        messages.created_at AS "createdAt", messages.updated_at AS "updatedAt",
+        substr(messages.text, ${offset} + 1, ${maxCharacters}) AS text,
+        ${offset} AS offset,
+        CASE WHEN length(messages.text) > ${offset} + ${maxCharacters}
+          THEN ${offset} + ${maxCharacters} ELSE NULL END AS "nextOffset"
+      FROM projection_thread_messages AS messages
+      INNER JOIN projection_threads AS threads ON threads.thread_id = messages.thread_id
+      INNER JOIN projection_projects AS projects ON projects.project_id = threads.project_id
+      WHERE threads.project_id = ${projectId} AND threads.thread_id = ${threadId}
+        AND messages.message_id = ${messageId}
+        AND threads.deleted_at IS NULL AND projects.deleted_at IS NULL
+        AND messages.is_streaming = 0
+        AND (messages.role = 'user' OR (messages.role = 'assistant'
+          AND messages.message_id IN (
+            SELECT turns.assistant_message_id FROM projection_turns AS turns
+            WHERE turns.assistant_message_id IS NOT NULL
+          )))
+      LIMIT 1
+    `,
   });
 
   const getActiveProjectRowByWorkspaceRoot = SqlSchema.findOneOption({
@@ -3056,9 +3107,11 @@ pending_approval_requests AS (
     "ProjectionSnapshotQuery.searchThreads",
   )(function* (input) {
     const escapedQuery = escapeLikePattern(input.query);
-    const rows = yield* searchActiveThreadRows({
+    const rows = yield* searchThreadRows({
       pattern: `%${escapedQuery}%`,
       limit: input.limit ?? 50,
+      projectId: input.projectId ?? null,
+      includeArchived: input.includeArchived ?? false,
     }).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
@@ -3071,12 +3124,21 @@ pending_approval_requests AS (
       matches: rows.map((row) => ({
         threadId: row.threadId,
         projectId: row.projectId,
+        messageId: row.messageId,
         source: row.source,
         snippet: buildSearchSnippet(row.matchText, input.query),
         messageCreatedAt: row.messageCreatedAt,
       })),
     };
   });
+
+  const readProjectConversationMessage: ProjectionSnapshotQueryShape["readProjectConversationMessage"] = (input) =>
+    readProjectConversationMessageRow(input).pipe(
+      Effect.mapError(toPersistenceSqlOrDecodeError(
+        "ProjectionSnapshotQuery.readProjectConversationMessage:query",
+        "ProjectionSnapshotQuery.readProjectConversationMessage:decodeRow",
+      )),
+    );
 
   const getActiveProjectByWorkspaceRoot: ProjectionSnapshotQueryShape["getActiveProjectByWorkspaceRoot"] =
     (workspaceRoot) =>
@@ -3846,6 +3908,7 @@ pending_approval_requests AS (
     getArchivedShellSnapshot,
     getDeletedWorktreeThreads,
     searchThreads,
+    readProjectConversationMessage,
     getSnapshotSequence,
     getCounts,
     getEventReplayStats,

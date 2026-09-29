@@ -105,6 +105,37 @@ export const VcsStatusInput = Schema.Struct({
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
 
+export const VcsReadHeadInput = Schema.Struct({ cwd: TrimmedNonEmptyStringSchema });
+export type VcsReadHeadInput = typeof VcsReadHeadInput.Type;
+
+// A null SHA means no resolvable HEAD, not proof that the repository is empty.
+export const VcsReadHeadResult = Schema.Struct({
+  isRepo: Schema.Boolean,
+  commitSha: Schema.NullOr(TrimmedNonEmptyStringSchema),
+});
+export type VcsReadHeadResult = typeof VcsReadHeadResult.Type;
+
+const FixedCommitId = Schema.String.check(Schema.isPattern(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i));
+export const VcsCompareCommitsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  baseCommit: FixedCommitId,
+  headCommit: FixedCommitId,
+  offset: Schema.optionalKey(NonNegativeInt),
+  limit: Schema.optionalKey(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
+});
+export type VcsCompareCommitsInput = typeof VcsCompareCommitsInput.Type;
+
+export const VcsCompareCommitsResult = Schema.Struct({
+  baseCommit: FixedCommitId,
+  headCommit: FixedCommitId,
+  baseIsAncestor: Schema.Boolean,
+  commits: Schema.Array(Schema.Struct({ commitSha: FixedCommitId, authoredAt: Schema.String, subject: Schema.String })),
+  nextOffset: Schema.NullOr(NonNegativeInt),
+  diff: Schema.String,
+  diffTruncated: Schema.Boolean,
+});
+export type VcsCompareCommitsResult = typeof VcsCompareCommitsResult.Type;
+
 export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });

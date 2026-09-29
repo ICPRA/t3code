@@ -5129,6 +5129,7 @@ describe("agent browser access", () => {
           }).pipe(Effect.orDie),
         getThreadDetailById: () => Effect.die("unused"),
         getThreadDetailSnapshot: () => Effect.die("unused"),
+        readProjectConversationMessage: () => Effect.die("unused"),
         searchThreads: () => Effect.die("unused"),
       });
       const providerLayer = makeProviderServiceLive({

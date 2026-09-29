@@ -2,6 +2,8 @@ import {
   ApprovalRequestId,
   CommandId,
   MessageId,
+  IsoDateTime,
+  NonNegativeInt,
   type OrchestrationEvent,
   OrchestrationProposedPlanId,
   CheckpointRef,
@@ -13,11 +15,12 @@ import {
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationThreadActivity,
-  type ProjectId,
+  ProjectId,
   type ProviderRequestKind,
   type ProviderRuntimeEvent,
   type ResponseStreamingMode,
   RuntimeRequestId,
+  ConsultedRecord,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -29,6 +32,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { formatTokens } from "@t3tools/shared/usageFormat";
@@ -489,6 +493,87 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
   return fields;
 }
 
+const ConversationReadResult = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  source: Schema.Literals(["user", "assistant"]),
+  updatedAt: IsoDateTime,
+  offset: NonNegativeInt,
+  nextOffset: Schema.NullOr(NonNegativeInt),
+  text: Schema.String.check(Schema.isMinLength(1)),
+});
+const decodeConversationReadResult = Schema.decodeUnknownOption(ConversationReadResult);
+const decodeConversationReadText = Schema.decodeUnknownOption(Schema.fromJsonString(ConversationReadResult));
+const decodeNativeConversationRead = Schema.decodeUnknownOption(Schema.Struct({
+  item: Schema.Struct({
+    server: Schema.Literal("t3-code"),
+    tool: Schema.Literal("workbench_read_conversation_message"),
+    status: Schema.Literal("completed"),
+    error: Schema.optionalKey(Schema.Null),
+    result: Schema.Struct({
+      isError: Schema.optionalKey(Schema.Literal(false)),
+      structuredContent: Schema.optionalKey(Schema.Unknown),
+      content: Schema.optionalKey(Schema.Array(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }))),
+    }),
+  }),
+}));
+const RecordReadResult = Schema.Struct({
+  ...ConsultedRecord.fields,
+  record: Schema.Record(Schema.String, Schema.Unknown),
+});
+const decodeRecordReadResult = Schema.decodeUnknownOption(RecordReadResult);
+const decodeRecordReadText = Schema.decodeUnknownOption(Schema.fromJsonString(RecordReadResult));
+const decodeNativeRecordRead = Schema.decodeUnknownOption(Schema.Struct({
+  item: Schema.Struct({
+    server: Schema.Literal("t3-code"),
+    tool: Schema.Literal("workbench_read_project_record"),
+    status: Schema.Literal("completed"),
+    error: Schema.optionalKey(Schema.Null),
+    result: Schema.Struct({
+      isError: Schema.optionalKey(Schema.Literal(false)),
+      structuredContent: Schema.optionalKey(Schema.Unknown),
+      content: Schema.optionalKey(Schema.Array(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }))),
+    }),
+  }),
+}));
+
+function consultedConversationSource(event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>) {
+  if (event.provider !== "codex" || event.turnId === undefined || event.payload.itemType !== "mcp_tool_call" || event.payload.status !== "completed") {
+    return undefined;
+  }
+  const envelope = decodeNativeConversationRead(event.payload.data);
+  if (Option.isNone(envelope)) return undefined;
+  const result = envelope.value.item.result;
+  // The native MCP server returns either structured output or one exact JSON text block.
+  const source = result.structuredContent !== undefined
+    ? decodeConversationReadResult(result.structuredContent)
+    : result.content?.length === 1
+      ? decodeConversationReadText(result.content[0]!.text)
+      : Option.none();
+  if (Option.isNone(source)) return undefined;
+  const value = source.value;
+  return {
+    projectId: value.projectId, threadId: value.threadId, messageId: value.messageId,
+    source: value.source, updatedAt: value.updatedAt, offset: value.offset, nextOffset: value.nextOffset,
+  };
+}
+
+function consultedProjectRecord(event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>): ConsultedRecord | undefined {
+  if (event.provider !== "codex" || event.turnId === undefined || event.payload.itemType !== "mcp_tool_call" || event.payload.status !== "completed") return undefined;
+  const envelope = decodeNativeRecordRead(event.payload.data);
+  if (Option.isNone(envelope)) return undefined;
+  const result = envelope.value.item.result;
+  const read = result.structuredContent !== undefined
+    ? decodeRecordReadResult(result.structuredContent)
+    : result.content?.length === 1
+      ? decodeRecordReadText(result.content[0]!.text)
+      : Option.none();
+  if (Option.isNone(read)) return undefined;
+  const { specgraphProject, nativeProjectId, environmentId, kind, id, slug, version, sourceRefs } = read.value;
+  return { specgraphProject, nativeProjectId, environmentId, kind, id, slug, version, ...(sourceRefs ? { sourceRefs } : {}) };
+}
+
 export function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
   taskTitle?: string,
@@ -500,6 +585,21 @@ export function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "turn.completed":
+    case "turn.aborted": {
+      const turnId = toTurnId(event.turnId);
+      if (!turnId || !event.payload.tokenUsage) return [];
+      return [{
+        id: event.eventId,
+        createdAt: event.createdAt,
+        tone: "info",
+        kind: "provider.turn.token-usage",
+        summary: "Provider-reported turn usage",
+        payload: { provider: event.provider, ...event.payload.tokenUsage },
+        turnId,
+        ...maybeSequence,
+      }];
+    }
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];
@@ -972,6 +1072,8 @@ export function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      const consultedSource = consultedConversationSource(event);
+      const consultedRecord = consultedProjectRecord(event);
       return [
         {
           id: event.eventId,
@@ -981,6 +1083,8 @@ export function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
+            ...(consultedSource ? { consultedSource } : {}),
+            ...(consultedRecord ? { consultedRecord } : {}),
             ...(event.itemId !== undefined ? { toolCallId: event.itemId } : {}),
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),

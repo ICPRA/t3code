@@ -24,6 +24,7 @@ import type {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadDetailWindow,
   OrchestrationThreadShell,
+  OrchestrationThreadSearchSource,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -77,6 +78,18 @@ export interface ProjectionThreadDetailQuery {
    * the activity query. Omit this option to preserve the full detail response.
    */
   readonly activityKinds?: ReadonlyArray<string>;
+}
+
+export interface ProjectionConversationMessage {
+  readonly projectId: ProjectId;
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly source: OrchestrationThreadSearchSource;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly text: string;
+  readonly offset: number;
+  readonly nextOffset: number | null;
 }
 
 /**
@@ -171,6 +184,15 @@ export interface ProjectionSnapshotQueryShape {
   readonly searchThreads: (
     input: OrchestrationSearchThreadsInput,
   ) => Effect.Effect<OrchestrationSearchThreadsResult, ProjectionRepositoryError>;
+
+  /** Read one eligible original message in Unicode-character chunks, including archived threads. */
+  readonly readProjectConversationMessage: (input: {
+    readonly projectId: ProjectId;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly offset: number;
+    readonly maxCharacters: number;
+  }) => Effect.Effect<Option.Option<ProjectionConversationMessage>, ProjectionRepositoryError>;
 
   /**
    * Read the latest projection snapshot sequence without hydrating read-model

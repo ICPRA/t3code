@@ -44,3 +44,8 @@ node_modules/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+
+# Local app runtime data (not source)
+/userdata/
+/caches/
+/worktrees/

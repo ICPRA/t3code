@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { WorkbenchProgramInput, WorkbenchProgramStatus, WorkbenchProgramError } from "./workbenchProgram.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ProviderAuthCancelInput,
@@ -76,6 +77,10 @@ import {
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   VcsStatusInput,
+  VcsReadHeadInput,
+  VcsReadHeadResult,
+  VcsCompareCommitsInput,
+  VcsCompareCommitsResult,
   VcsStatusResult,
   VcsStatusStreamEvent,
 } from "./git.ts";
@@ -275,6 +280,10 @@ import {
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
+  workbenchProgramStart: "workbench.programStart",
+  workbenchProgramCancel: "workbench.programCancel",
+  workbenchProgramRead: "workbench.programRead",
+  workbenchProgramComplete: "workbench.programComplete",
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -313,6 +322,8 @@ export const WS_METHODS = {
   // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
+  vcsReadHead: "vcs.readHead",
+  vcsCompareCommits: "vcs.compareCommits",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -1025,6 +1036,18 @@ const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsReadHeadRpc = Rpc.make(WS_METHODS.vcsReadHead, {
+  payload: VcsReadHeadInput,
+  success: VcsReadHeadResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
+const WsVcsCompareCommitsRpc = Rpc.make(WS_METHODS.vcsCompareCommits, {
+  payload: VcsCompareCommitsInput,
+  success: VcsCompareCommitsResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeWorktreeSetupRpc = Rpc.make(WS_METHODS.subscribeWorktreeSetup, {
   payload: WorktreeSetupSubscribeInput,
   success: WorktreeSetupStreamEvent,
@@ -1392,6 +1415,16 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  ...[
+    WS_METHODS.workbenchProgramStart,
+    WS_METHODS.workbenchProgramCancel,
+    WS_METHODS.workbenchProgramRead,
+    WS_METHODS.workbenchProgramComplete,
+  ].map((tag) => Rpc.make(tag, {
+    payload: WorkbenchProgramInput,
+    success: WorkbenchProgramStatus,
+    error: Schema.Union([WorkbenchProgramError, EnvironmentAuthorizationError]),
+  })),
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -1482,6 +1515,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorktreeSetupCancelRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
+  WsVcsReadHeadRpc,
+  WsVcsCompareCommitsRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,

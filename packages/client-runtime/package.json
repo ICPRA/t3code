@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state/workbench-program": {
+      "types": "./src/state/workbenchProgram.ts",
+      "default": "./src/state/workbenchProgram.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

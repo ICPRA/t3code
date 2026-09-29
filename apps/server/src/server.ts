@@ -83,6 +83,8 @@ import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import { startDeliveryHooks } from "./workbenchDeliveryHooks.ts";
+import * as WorkbenchProgramRuns from "./workbenchProgramRuns.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
@@ -503,6 +505,11 @@ const AntigravityInstallationRefreshLive = Layer.effectDiscard(
 );
 
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+  Layer.provideMerge(WorkbenchProgramRuns.layer.pipe(
+    Layer.provide(ProcessRunner.layer),
+    Layer.provide(OrchestrationLayerLive),
+    Layer.provide(ServerEnvironmentLayerLive),
+  )),
   Layer.provideMerge(AntigravityInstallationRefreshLive),
   Layer.provideMerge(ReplayMarkers.layer),
   Layer.provideMerge(ProviderAuthServiceLive),
@@ -628,6 +635,7 @@ const makeServerLayer = Layer.unwrap(
     const runtimeStateParked = yield* Deferred.make<void>();
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
+    const deliveryHooksParked = yield* Deferred.make<void>();
     const routesReady = yield* Deferred.make<void>();
     const launcherLayer = ServiceLauncherClient.layer;
 
@@ -948,6 +956,7 @@ const makeServerLayer = Layer.unwrap(
         [
           Deferred.await(runtimeStateParked),
           Deferred.await(cloudLinkParked),
+          Deferred.await(deliveryHooksParked),
           Deferred.await(routesReady),
           ...(config.tailscaleServeEnabled ? [Deferred.await(tailscaleParked)] : []),
         ],
@@ -966,6 +975,7 @@ const makeServerLayer = Layer.unwrap(
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
       HeapSnapshot.layer,
+      Layer.effectDiscard(startDeliveryHooks.pipe(Effect.andThen(Deferred.succeed(deliveryHooksParked, undefined)))),
     );
 
     return serverApplicationLayer.pipe(

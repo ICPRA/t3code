@@ -27,6 +27,7 @@
   },
   "include": [
     "src",
+    "../../../project-workbench/extensions/workbench-ui/src",
     "vite",
     "vite.config.ts",
     "vercel.ts",

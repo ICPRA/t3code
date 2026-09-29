@@ -44,3 +44,8 @@ export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
 export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";
+export * from "./workbenchProgram.ts";
+export * from "./workbenchCandidate.ts";
+export * from "./workbenchNodeOwnership.ts";
+export * from "./workbenchNodeMerge.ts";
+export * from "./workbench.ts";
