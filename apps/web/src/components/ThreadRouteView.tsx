@@ -1,11 +1,13 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useLocation, useNavigate, useRouter } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 
 import ChatView from "./ChatView";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
+import { clearWorkbenchReturn, readWorkbenchReturn } from "./workbench/workbenchReturn";
+import { useI18n } from "../i18n/i18n";
 import { SidebarInset } from "./ui/sidebar";
 import {
   finalizePromotedDraftThreadByRef,
@@ -46,6 +48,12 @@ import { resolveThreadSyncPhase } from "../threadSync";
  */
 export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const navigate = useNavigate();
+  const router = useRouter();
+  const { language } = useI18n();
+  // Recomputed on every location change so a href saved just before jumping
+  // from the workbench page is picked up without a remount.
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const workbenchReturnHref = useMemo(() => readWorkbenchReturn(), [pathname]);
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
     draftId === null ? null : store.getDraftSession(draftId),
@@ -207,7 +215,20 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   }
 
   return (
-    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
+    <SidebarInset className="relative h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
+      {workbenchReturnHref !== null ? (
+        <button
+          type="button"
+          className="absolute right-3 top-3 z-40 rounded-md border bg-background/90 px-2 py-1 text-xs shadow-sm hover:bg-accent"
+          onClick={() => {
+            const href = workbenchReturnHref;
+            clearWorkbenchReturn();
+            router.history.push(href);
+          }}
+        >
+          {language === "zh" ? "返回工作台" : "Back to workbench"}
+        </button>
+      ) : null}
       {view}
     </SidebarInset>
   );
